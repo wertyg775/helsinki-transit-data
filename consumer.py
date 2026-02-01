@@ -26,40 +26,50 @@ consumer = KafkaConsumer(
 )
 
 def insert_to_db(data):
-    """Parses HSL JSON and inserts into Postgres using pooled connection"""
     conn = None
     try:
-        # Get connection from pool
+        # Get a connection from the pool
         conn = connection_pool.getconn()
         cur = conn.cursor()
 
         vp = data.get("VP", {})
         route_id = vp.get("desi")
-        vehicle_id = vp.get("veh")
         lat = vp.get("lat")
-        long = vp.get("long")
+        lon = vp.get("long")
         tst = vp.get("tst")
-        
-        if lat and long:
+
+        if lat and lon:
+            # OPTIMIZED SQL: 
+            # We use RETURNING in_zone so we don't have to do a second SELECT query.
             insert_query = """
-            INSERT INTO bus_locations (route_id, vehicle_id, latitude, longitude, timestamp, raw_payload)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO bus_locations (route_id, latitude, longitude, timestamp, in_zone)
+            SELECT 
+                %s, %s, %s, %s,
+                (SELECT zone_name FROM geofences WHERE ST_Contains(geom, ST_SetSRID(ST_MakePoint(%s, %s), 4326)) LIMIT 1)
+            RETURNING in_zone;
             """
-            cur.execute(insert_query, (
-                route_id, vehicle_id, lat, long, tst, json.dumps(data)
-            ))
+            
+            cur.execute(insert_query, (route_id, lat, lon, tst, lon, lat))
+            
+            # Get the result of 'in_zone' from the insert command itself
+            result = cur.fetchone()
+            zone_hit = result[0] if result else None
+            
             conn.commit()
-            print(f"Stored: Bus {route_id} at {lat}, {long}")
+            
+            if zone_hit:
+                print(f"🚨 ALERT: Bus {route_id} entered {zone_hit}!")
+            else:
+                print(f"Bus {route_id} is cruising.")
 
         cur.close()
 
     except Exception as e:
+        print(f"Error: {e}")
         if conn:
             conn.rollback()
-        print(f"Error processing message: {e}")
-    
     finally:
-        # Return connection to pool (doesn't close it)
+        # IMPORTANT: Always put the connection back in the pool
         if conn:
             connection_pool.putconn(conn)
 
