@@ -2,7 +2,7 @@ version: '3'
 services:
   # The Database
   postgres:
-    image: postgres
+    image: postgis/postgis:15-3.3
     container_name: helsinki-db
     environment:
       POSTGRES_PASSWORD: ${DB_PASSWORD}
